@@ -4,18 +4,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-This is a new Python bot project. The virtual environment uses Python 3.14 and is located in `.venv/`.
+Telegram-бот на aiogram 3 (async). Виртуальное окружение — Python 3.14, папка `.venv/`.
+
+## Structure
+
+```
+bot.py            # Entry point — создаёт Bot, Dispatcher, запускает polling
+config.py         # Читает BOT_TOKEN из .env через python-dotenv
+handlers/
+  common.py       # Роутер с базовыми командами /start и /help
+```
+
+Новые обработчики добавляются как отдельные модули в `handlers/`, каждый создаёт свой `Router`, который подключается в `bot.py` через `dp.include_router(...)`.
 
 ## Environment Setup
 
 ```bash
-# Activate the virtual environment
 source .venv/bin/activate
-
-# Install dependencies (once requirements.txt exists)
 pip install -r requirements.txt
+
+cp .env.example .env
+# Вставить BOT_TOKEN в .env
 ```
 
-## Development Commands
+## Running
 
-Commands will be added here as the project grows (running the bot, running tests, linting, etc.).
+```bash
+python bot.py
+```
