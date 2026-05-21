@@ -12,9 +12,15 @@ async def init_db():
                 username TEXT,
                 first_name TEXT,
                 joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                has_access INTEGER DEFAULT 0
+                has_access INTEGER DEFAULT 0,
+                last_keyword_at REAL DEFAULT 0
             )
         """)
+        # Добавить колонку если база уже существует без неё
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN last_keyword_at REAL DEFAULT 0")
+        except Exception:
+            pass
         await db.execute("""
             CREATE TABLE IF NOT EXISTS keywords (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,6 +113,28 @@ async def get_user_has_access(telegram_id: int) -> bool:
         ) as cursor:
             row = await cursor.fetchone()
             return bool(row and row[0])
+
+
+async def get_last_keyword_time(telegram_id: int) -> float:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT last_keyword_at FROM users WHERE telegram_id = ?",
+            (telegram_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return float(row[0]) if row else 0.0
+
+
+async def update_last_keyword_time(telegram_id: int, timestamp: float):
+    async with aiosqlite.connect(DB_PATH) as db:
+        # UPSERT — работает даже если пользователь не писал /start
+        await db.execute(
+            """INSERT INTO users (telegram_id, last_keyword_at)
+               VALUES (?, ?)
+               ON CONFLICT(telegram_id) DO UPDATE SET last_keyword_at = excluded.last_keyword_at""",
+            (telegram_id, timestamp),
+        )
+        await db.commit()
 
 
 async def get_all_user_ids():
