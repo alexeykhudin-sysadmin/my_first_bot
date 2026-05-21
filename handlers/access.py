@@ -1,12 +1,19 @@
+import asyncio
+
 from aiogram import Router, F, Bot
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import CHANNEL_ID
-from database import get_keyword, set_user_access, increment_keyword_uses
+from database import get_keyword, set_user_access, increment_keyword_uses, get_user_has_access
 from keyboards.user import subscribe_keyboard
 
 router = Router()
+
+# Хранит активные задачи напоминаний: user_id -> asyncio.Task
+pending_reminders: dict[int, asyncio.Task] = {}
+
+REMINDER_DELAY = 600  # 10 минут
 
 
 async def is_subscribed(bot: Bot, user_id: int) -> bool:
@@ -15,6 +22,89 @@ async def is_subscribed(bot: Bot, user_id: int) -> bool:
         return member.status not in ["left", "kicked", "banned"]
     except TelegramBadRequest:
         return False
+
+
+async def reminder_task(bot: Bot, user_id: int, word: str, reward: str):
+    """Два напоминания с задержкой 10 минут — как в Instagram-боте."""
+
+    # --- Первое напоминание через 10 минут ---
+    await asyncio.sleep(REMINDER_DELAY)
+
+    if await get_user_has_access(user_id):
+        return
+
+    if await is_subscribed(bot, user_id):
+        await set_user_access(user_id)
+        await increment_keyword_uses(word)
+        try:
+            await bot.send_message(
+                user_id,
+                f"✅ Отлично! Подписка подтверждена.\n\nВот твой бонус:\n\n{reward}",
+            )
+        except Exception:
+            pass
+        pending_reminders.pop(user_id, None)
+        return
+
+    try:
+        await bot.send_message(
+            user_id,
+            "Чего же ты ждёшь? 😏\n\n"
+            "Подпишись на канал и получи бонус — всё ещё ждёт тебя! 👇",
+            reply_markup=subscribe_keyboard(CHANNEL_ID, word),
+        )
+    except Exception:
+        pending_reminders.pop(user_id, None)
+        return
+
+    # --- Второе напоминание через ещё 10 минут ---
+    await asyncio.sleep(REMINDER_DELAY)
+
+    if await get_user_has_access(user_id):
+        return
+
+    if await is_subscribed(bot, user_id):
+        await set_user_access(user_id)
+        await increment_keyword_uses(word)
+        try:
+            await bot.send_message(
+                user_id,
+                f"✅ Отлично! Подписка подтверждена.\n\nВот твой бонус:\n\n{reward}",
+            )
+        except Exception:
+            pass
+        pending_reminders.pop(user_id, None)
+        return
+
+    # --- Финальное сообщение: время вышло ---
+    try:
+        await bot.send_message(
+            user_id,
+            "⏰ Время вышло, бонуса не будет.\n\n"
+            "Но ты всегда можешь подписаться на канал — там много полезного! 👇",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="📢 Перейти в канал",
+                    url=f"https://t.me/{CHANNEL_ID.lstrip('@')}",
+                )
+            ]]),
+        )
+    except Exception:
+        pass
+
+    pending_reminders.pop(user_id, None)
+
+
+def cancel_reminder(user_id: int):
+    task = pending_reminders.pop(user_id, None)
+    if task and not task.done():
+        task.cancel()
+
+
+def start_reminder(bot: Bot, user_id: int, word: str, reward: str):
+    cancel_reminder(user_id)
+    task = asyncio.create_task(reminder_task(bot, user_id, word, reward))
+    pending_reminders[user_id] = task
 
 
 @router.message(F.text & ~F.text.startswith("/"))
@@ -28,15 +118,19 @@ async def handle_keyword(message: Message, bot: Bot):
     _, word, reward, _ = keyword
 
     if await is_subscribed(bot, message.from_user.id):
+        cancel_reminder(message.from_user.id)
         await set_user_access(message.from_user.id)
         await increment_keyword_uses(word)
-        await message.answer(f"✅ Отлично! Подписка подтверждена.\n\nВот твой бонус:\n\n{reward}")
+        await message.answer(
+            f"✅ Отлично! Подписка подтверждена.\n\nВот твой бонус:\n\n{reward}"
+        )
     else:
         await message.answer(
             "Чтобы получить доступ, нужно подписаться на канал.\n\n"
             "Подпишись и нажми кнопку ниже 👇",
             reply_markup=subscribe_keyboard(CHANNEL_ID, word),
         )
+        start_reminder(bot, message.from_user.id, word, reward)
 
 
 @router.callback_query(F.data.startswith("check_sub:"))
@@ -51,6 +145,7 @@ async def recheck_subscription(callback: CallbackQuery, bot: Bot):
     _, kw_word, reward, _ = keyword
 
     if await is_subscribed(bot, callback.from_user.id):
+        cancel_reminder(callback.from_user.id)
         await set_user_access(callback.from_user.id)
         await increment_keyword_uses(kw_word)
         await callback.message.edit_text(

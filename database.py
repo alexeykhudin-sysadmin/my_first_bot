@@ -99,6 +99,16 @@ async def get_stats():
         return total, with_access
 
 
+async def get_user_has_access(telegram_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT has_access FROM users WHERE telegram_id = ?",
+            (telegram_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return bool(row and row[0])
+
+
 async def get_all_user_ids():
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT telegram_id FROM users") as cursor:
